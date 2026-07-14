@@ -1,0 +1,5 @@
+# Parsed CSVs are local-only artifacts, rebuilt from raw at analysis time.
+data/csv/
+data/prepared/
+__pycache__/
+*.pyc

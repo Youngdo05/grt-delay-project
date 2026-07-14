@@ -1,0 +1,198 @@
+"""GRT GTFS Realtime logger.
+
+Fetches TripUpdates from GRT's public feeds, saves the raw protobuf
+(gzipped) for reproducibility, and optionally appends parsed per stop
+rows to a daily CSV for local inspection.
+
+Designed to be run every ~10 minutes by GitHub Actions or cron.
+Missing a run is fine: predictions are re-reported on every poll, and
+the final observation per (trip, stop) is what matters for labels.
+
+Note: this feed publishes predicted arrival/departure times but NOT
+delay fields (verified 2026-07-07: 0 of 10,219 bus stop updates had
+arrival.delay). Delay labels are derived downstream by joining
+arrival_time_utc against the static GTFS schedule. The delay columns
+are kept in the CSV schema for completeness but will be blank.
+
+Env vars:
+  GRT_WRITE_CSV=0  skip the parsed daily CSV (used in Actions, where
+                   only raw protobufs are committed; CSVs are rebuilt
+                   locally at analysis time)
+"""
+
+import csv
+import gzip
+import os
+import ssl
+import sys
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import requests
+from requests.adapters import HTTPAdapter
+from google.transit import gtfs_realtime_pb2
+
+# ---------------------------------------------------------------------------
+# CONFIG - URLs extracted and verified live on 2026-07-07 (Task A)
+# ---------------------------------------------------------------------------
+BASE = "https://webapps.regionofwaterloo.ca/api/grt-routes/api"
+FEEDS = {
+    "bus_tripupdates": f"{BASE}/tripupdates/1",
+    "lrt_tripupdates": f"{BASE}/tripupdates/2",
+    # Vehicle positions are optional; delays come from TripUpdates.
+    # "bus_vehiclepositions": f"{BASE}/vehiclepositions/1",
+    # "lrt_vehiclepositions": f"{BASE}/vehiclepositions/2",
+}
+
+LOCAL_TZ = ZoneInfo("America/Toronto")
+DATA_DIR = Path(__file__).parent / "data"
+RAW_DIR = DATA_DIR / "raw"
+CSV_DIR = DATA_DIR / "csv"
+WRITE_CSV = os.environ.get("GRT_WRITE_CSV", "1") != "0"
+
+CSV_FIELDS = [
+    "poll_utc",          # when we fetched the feed
+    "feed",              # bus_tripupdates / lrt_tripupdates
+    "feed_ts_utc",       # FeedHeader.timestamp (feed generation time)
+    "trip_id",
+    "route_id",
+    "start_date",
+    "start_time",
+    "schedule_relationship",
+    "vehicle_id",
+    "stop_sequence",
+    "stop_id",
+    "arrival_delay_s",   # blank on this feed; kept for schema stability
+    "arrival_time_utc",  # predicted arrival epoch; the label source
+    "departure_delay_s",
+    "departure_time_utc",
+]
+
+
+class LegacyTLSAdapter(HTTPAdapter):
+    """The Region of Waterloo server negotiates a small DH key that
+    OpenSSL 3 rejects at its default security level (DH_KEY_TOO_SMALL,
+    observed 2026-07-14). Lower the cipher security level for this
+    session only. Certificate verification stays fully enabled."""
+
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = ssl.create_default_context()
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
+SESSION = requests.Session()
+SESSION.mount("https://", LegacyTLSAdapter())
+
+
+def fetch(url: str, retries: int = 3) -> bytes:
+    last_err = None
+    for attempt in range(retries):
+        try:
+            r = SESSION.get(url, timeout=15)
+            r.raise_for_status()
+            return r.content
+        except Exception as e:
+            last_err = e
+            time.sleep(5 * (attempt + 1))
+    raise RuntimeError(f"fetch failed after {retries} tries: {url}: {last_err}")
+
+
+def parse_tripupdates(blob: bytes, feed_name: str, poll_utc: str) -> list[dict]:
+    msg = gtfs_realtime_pb2.FeedMessage()
+    msg.ParseFromString(blob)
+    feed_ts = msg.header.timestamp or ""
+    rows = []
+    for ent in msg.entity:
+        if not ent.HasField("trip_update"):
+            continue
+        tu = ent.trip_update
+        trip = tu.trip
+        base = {
+            "poll_utc": poll_utc,
+            "feed": feed_name,
+            "feed_ts_utc": feed_ts,
+            "trip_id": trip.trip_id,
+            "route_id": trip.route_id,
+            "start_date": trip.start_date,
+            "start_time": trip.start_time,
+            "schedule_relationship": trip.schedule_relationship,
+            "vehicle_id": tu.vehicle.id if tu.HasField("vehicle") else "",
+        }
+        for stu in tu.stop_time_update:
+            row = dict(base)
+            row["stop_sequence"] = stu.stop_sequence
+            row["stop_id"] = stu.stop_id
+            row["arrival_delay_s"] = (
+                stu.arrival.delay if stu.HasField("arrival") and stu.arrival.HasField("delay") else ""
+            )
+            row["arrival_time_utc"] = (
+                stu.arrival.time if stu.HasField("arrival") and stu.arrival.HasField("time") else ""
+            )
+            row["departure_delay_s"] = (
+                stu.departure.delay if stu.HasField("departure") and stu.departure.HasField("delay") else ""
+            )
+            row["departure_time_utc"] = (
+                stu.departure.time if stu.HasField("departure") and stu.departure.HasField("time") else ""
+            )
+            rows.append(row)
+    return rows
+
+
+def main() -> int:
+    now_utc = datetime.now(timezone.utc)
+    poll_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+    local_day = now_utc.astimezone(LOCAL_TZ).strftime("%Y-%m-%d")
+    stamp = now_utc.strftime("%Y%m%dT%H%M%SZ")
+
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    if WRITE_CSV:
+        CSV_DIR.mkdir(parents=True, exist_ok=True)
+
+    total_rows = 0
+    failures = []
+    for feed_name, url in FEEDS.items():
+        try:
+            blob = fetch(url)
+        except RuntimeError as e:
+            print(f"[error] {e}")
+            failures.append(feed_name)
+            continue
+
+        # 1) archive raw protobuf, gzipped (re-derivable ground truth)
+        raw_path = RAW_DIR / local_day / f"{feed_name}_{stamp}.pb.gz"
+        raw_path.parent.mkdir(parents=True, exist_ok=True)
+        with gzip.open(raw_path, "wb") as f:
+            f.write(blob)
+
+        # 2) parse (always, for the row count) and optionally append CSV
+        rows = parse_tripupdates(blob, feed_name, poll_utc)
+        if WRITE_CSV:
+            csv_path = CSV_DIR / f"tripupdates_{local_day}.csv"
+            new_file = not csv_path.exists()
+            with open(csv_path, "a", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+                if new_file:
+                    w.writeheader()
+                w.writerows(rows)
+        total_rows += len(rows)
+        print(f"[ok] {feed_name}: {len(rows)} stop-time rows")
+
+    # heartbeat for the morning glance
+    with open(DATA_DIR / "status.txt", "w") as f:
+        f.write(
+            f"last_success_utc={poll_utc}\n"
+            f"rows_this_poll={total_rows}\n"
+            f"failures={','.join(failures) or 'none'}\n"
+        )
+
+    # Non-zero exit only if *everything* failed, so one flaky feed
+    # doesn't mark the whole run red.
+    return 1 if failures and total_rows == 0 else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

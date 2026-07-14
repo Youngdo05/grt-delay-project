@@ -1,0 +1,58 @@
+name: Collect GRT realtime data
+
+on:
+  schedule:
+    # GRT service hours are roughly 5am to 1am America/Toronto (EDT = UTC-4
+    # for the whole collection window, no DST transition before November).
+    # Two cron lines cover 09:00-23:59 and 00:00-05:59 UTC.
+    - cron: "*/10 9-23 * * *"
+    - cron: "*/10 0-5 * * *"
+  workflow_dispatch: {}       # manual "Run workflow" button for testing
+
+permissions:
+  contents: write
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      # Sparse checkout: the runner never downloads the growing data/raw
+      # tree (write-once files the job doesn't read back). filter: blob:none
+      # keeps the clone small as history grows.
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            /*
+            !data/raw/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Run logger
+        run: python logger.py
+        env:
+          GRT_WRITE_CSV: "0"   # raw only; CSVs are rebuilt locally
+
+      - name: Commit data
+        run: |
+          git config user.name "grt-logger-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add --sparse data/
+          if git diff --cached --quiet; then
+            echo "no changes"
+          else
+            git commit -m "data: $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]"
+            git pull --rebase origin main
+            git push
+          fi
