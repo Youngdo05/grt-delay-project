@@ -3,3 +3,8 @@ data/csv/
 data/prepared/
 __pycache__/
 *.pyc
+
+# Shared preprocessing stays out of the public repo (submitted with course code instead)
+prepare.py
+fetch_weather.py
+data/weather/
