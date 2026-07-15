@@ -2,11 +2,15 @@ name: Collect GRT realtime data
 
 on:
   schedule:
-    # GRT service hours are roughly 5am to 1am America/Toronto (EDT = UTC-4
-    # for the whole collection window, no DST transition before November).
-    # Two cron lines cover 09:00-23:59 and 00:00-05:59 UTC.
-    - cron: "*/10 9-23 * * *"
-    - cron: "*/10 0-5 * * *"
+    # GitHub throttles high-frequency cron heavily (observed 2026-07-14:
+    # a */10 schedule fired roughly hourly). So instead: fire once per
+    # hour and poll 6 times inside the job at 10 minute intervals,
+    # committing after each poll. Runner minutes are free on public repos.
+    # GRT service hours are roughly 5am to 1am America/Toronto
+    # (EDT = UTC-4 all collection window), i.e. 09:00-05:59 UTC.
+    # Minute 5 avoids the congested top of the hour.
+    - cron: "5 9-23 * * *"
+    - cron: "5 0-5 * * *"
   workflow_dispatch: {}       # manual "Run workflow" button for testing
 
 permissions:
@@ -19,7 +23,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 58
     steps:
       # Sparse checkout: the runner never downloads the growing data/raw
       # tree (write-once files the job doesn't read back). filter: blob:none
@@ -39,20 +43,22 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Run logger
-        run: python logger.py
+      - name: Poll six times at 10 minute intervals
         env:
           GRT_WRITE_CSV: "0"   # raw only; CSVs are rebuilt locally
-
-      - name: Commit data
         run: |
           git config user.name "grt-logger-bot"
           git config user.email "actions@users.noreply.github.com"
-          git add --sparse data/
-          if git diff --cached --quiet; then
-            echo "no changes"
-          else
-            git commit -m "data: $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]"
-            git pull --rebase origin main
-            git push
-          fi
+          for i in 1 2 3 4 5 6; do
+            echo "=== poll $i of 6 at $(date -u +'%H:%M:%S') UTC ==="
+            python logger.py || echo "poll $i failed, continuing"
+            git add --sparse data/
+            if git diff --cached --quiet; then
+              echo "no changes"
+            else
+              git commit -m "data: $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]"
+              git pull --rebase origin main
+              git push
+            fi
+            if [ "$i" -lt 6 ]; then sleep 540; fi
+          done
