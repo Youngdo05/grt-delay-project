@@ -181,10 +181,23 @@ def main() -> int:
         total_rows += len(rows)
         print(f"[ok] {feed_name}: {len(rows)} stop-time rows")
 
-    # heartbeat for the morning glance
-    with open(DATA_DIR / "status.txt", "w") as f:
+    # heartbeat for the morning glance; last_success_utc only advances
+    # when at least one feed was actually fetched, so a dead feed can't
+    # masquerade as a healthy one
+    status_path = DATA_DIR / "status.txt"
+    success = len(failures) < len(FEEDS)
+    last_success = ""
+    if status_path.exists():
+        for line in status_path.read_text().splitlines():
+            if line.startswith("last_success_utc="):
+                last_success = line.split("=", 1)[1]
+                break
+    if success:
+        last_success = poll_utc
+    with open(status_path, "w") as f:
         f.write(
-            f"last_success_utc={poll_utc}\n"
+            f"last_attempt_utc={poll_utc}\n"
+            f"last_success_utc={last_success}\n"
             f"rows_this_poll={total_rows}\n"
             f"failures={','.join(failures) or 'none'}\n"
         )

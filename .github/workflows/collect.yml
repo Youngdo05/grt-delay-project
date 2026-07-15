@@ -57,8 +57,19 @@ jobs:
               echo "no changes"
             else
               git commit -m "data: $(date -u +'%Y-%m-%dT%H:%M:%SZ') [skip ci]"
-              git pull --rebase origin main
-              git push
+              # Retry the push a few times; if it still fails, keep the
+              # commit local and let the next poll's push carry it. A
+              # transient race must not kill the remaining polls.
+              pushed=no
+              for attempt in 1 2 3; do
+                if git pull --rebase origin main && git push; then
+                  pushed=yes
+                  break
+                fi
+                echo "push attempt $attempt failed"
+                sleep 5
+              done
+              [ "$pushed" = yes ] || echo "push deferred to next poll"
             fi
             if [ "$i" -lt 6 ]; then sleep 540; fi
           done
