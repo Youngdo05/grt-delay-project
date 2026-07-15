@@ -62,11 +62,15 @@ jobs:
               # transient race must not kill the remaining polls.
               pushed=no
               for attempt in 1 2 3; do
-                if git pull --rebase origin main && git push; then
+                # -X theirs: if a local push changed data/status.txt in
+                # parallel, auto-resolve in favor of this job's version
+                # (heartbeat is ephemeral, raw filenames never collide)
+                if git pull --rebase -X theirs origin main && git push; then
                   pushed=yes
                   break
                 fi
                 echo "push attempt $attempt failed"
+                git rebase --abort 2>/dev/null || true
                 sleep 5
               done
               [ "$pushed" = yes ] || echo "push deferred to next poll"
