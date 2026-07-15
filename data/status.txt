@@ -1,3 +1,4 @@
-last_success_utc=2026-07-15T01:43:55Z
+last_attempt_utc=2026-07-15T01:44:15Z
+last_success_utc=2026-07-15T01:44:15Z
 rows_this_poll=7212
 failures=none
