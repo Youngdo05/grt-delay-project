@@ -1,3 +1,7 @@
-requests
-gtfs-realtime-bindings
-tzdata
+# Pinned to the versions verified in the green Actions run of
+# 2026-07-15 (run 29384092822). Do not upgrade before the Aug 1
+# data freeze without a local smoke test.
+requests==2.34.2
+gtfs-realtime-bindings==2.1.0
+protobuf==7.35.1
+tzdata==2026.3

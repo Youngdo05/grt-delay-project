@@ -49,9 +49,16 @@ jobs:
         run: |
           git config user.name "grt-logger-bot"
           git config user.email "actions@users.noreply.github.com"
+          ok_polls=0
           for i in 1 2 3 4 5 6; do
             echo "=== poll $i of 6 at $(date -u +'%H:%M:%S') UTC ==="
-            python logger.py || echo "poll $i failed, continuing"
+            rc=0
+            python logger.py || rc=$?
+            if [ "$rc" -eq 0 ]; then
+              ok_polls=$((ok_polls+1))
+            else
+              echo "poll $i exit $rc (1=partial feeds, 2=nothing collected), continuing"
+            fi
             git add --sparse data/
             if git diff --cached --quiet; then
               echo "no changes"
@@ -77,3 +84,10 @@ jobs:
             fi
             if [ "$i" -lt 6 ]; then sleep 540; fi
           done
+          echo "polls with all feeds ok: $ok_polls/6"
+          # Individual poll failures are tolerated, but an hour that
+          # never collected a complete bus+LRT pair must show RED.
+          if [ "$ok_polls" -eq 0 ]; then
+            echo "::error::no poll collected a complete feed pair this hour"
+            exit 1
+          fi

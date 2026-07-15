@@ -154,6 +154,7 @@ def main() -> int:
 
     total_rows = 0
     failures = []
+    feed_rows = {}
     for feed_name, url in FEEDS.items():
         try:
             blob = fetch(url)
@@ -162,14 +163,20 @@ def main() -> int:
             failures.append(feed_name)
             continue
 
-        # 1) archive raw protobuf, gzipped (re-derivable ground truth)
+        # 1) archive raw protobuf, gzipped, BEFORE parsing - a schema
+        #    surprise must never cost us the raw bytes
         raw_path = RAW_DIR / local_day / f"{feed_name}_{stamp}.pb.gz"
         raw_path.parent.mkdir(parents=True, exist_ok=True)
         with gzip.open(raw_path, "wb") as f:
             f.write(blob)
 
-        # 2) parse (always, for the row count) and optionally append CSV
-        rows = parse_tripupdates(blob, feed_name, poll_utc)
+        # 2) parse, guarded per feed so one bad feed can't stop the other
+        try:
+            rows = parse_tripupdates(blob, feed_name, poll_utc)
+        except Exception as e:
+            print(f"[error] {feed_name}: parse failed (raw archived): {e}")
+            failures.append(f"{feed_name}:parse")
+            continue
         if WRITE_CSV:
             csv_path = CSV_DIR / f"tripupdates_{local_day}.csv"
             new_file = not csv_path.exists()
@@ -178,33 +185,43 @@ def main() -> int:
                 if new_file:
                     w.writeheader()
                 w.writerows(rows)
+        feed_rows[feed_name] = len(rows)
         total_rows += len(rows)
         print(f"[ok] {feed_name}: {len(rows)} stop-time rows")
 
     # heartbeat for the morning glance; last_success_utc only advances
-    # when at least one feed was actually fetched, so a dead feed can't
-    # masquerade as a healthy one
+    # when EVERY feed was fetched and parsed, so a persistent one-feed
+    # outage is visible at a glance via the per-feed lines
     status_path = DATA_DIR / "status.txt"
-    success = len(failures) < len(FEEDS)
+    all_ok = len(feed_rows) == len(FEEDS)
     last_success = ""
     if status_path.exists():
         for line in status_path.read_text().splitlines():
             if line.startswith("last_success_utc="):
                 last_success = line.split("=", 1)[1]
                 break
-    if success:
+    if all_ok:
         last_success = poll_utc
+    per_feed = ""
+    for feed_name in FEEDS:
+        short = feed_name.split("_")[0]
+        got = feed_name in feed_rows
+        per_feed += f"{short}_rows={feed_rows.get(feed_name, '')}\n"
+        per_feed += f"{short}_success={'true' if got else 'false'}\n"
     with open(status_path, "w") as f:
         f.write(
             f"last_attempt_utc={poll_utc}\n"
             f"last_success_utc={last_success}\n"
             f"rows_this_poll={total_rows}\n"
+            f"{per_feed}"
             f"failures={','.join(failures) or 'none'}\n"
         )
 
-    # Non-zero exit only if *everything* failed, so one flaky feed
-    # doesn't mark the whole run red.
-    return 1 if failures and total_rows == 0 else 0
+    # Exit codes consumed by the workflow's failure accounting:
+    #   0 = all feeds collected, 1 = partial, 2 = nothing collected
+    if all_ok:
+        return 0
+    return 1 if feed_rows else 2
 
 
 if __name__ == "__main__":

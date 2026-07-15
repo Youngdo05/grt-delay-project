@@ -1,0 +1,66 @@
+name: Archive static GTFS on change
+
+on:
+  schedule:
+    # Daily at 10:20 UTC (6:20am Toronto), before morning service peaks.
+    # Downloads both static zips and commits a new dated copy ONLY when
+    # the content hash changed. Joining realtime trips against a stale
+    # schedule version silently corrupts delay labels, so never miss a
+    # version and never overwrite old ones.
+    - cron: "20 10 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: staticfeeds
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout: |
+            /*
+            !data/raw/
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r requirements.txt
+
+      - name: Download, compare, archive on change
+        run: |
+          today=$(date -u +%F)
+          changed=0
+          for mode in bus lrt; do
+            if [ "$mode" = bus ]; then id=1; else id=2; fi
+            # reuse the logger's TLS adapter (server needs SECLEVEL=1)
+            python -c "from logger import fetch; open('/tmp/${mode}.zip','wb').write(fetch('https://webapps.regionofwaterloo.ca/api/grt-routes/api/staticfeeds/${id}'))"
+            new_hash=$(sha256sum /tmp/${mode}.zip | cut -d' ' -f1)
+            latest=$(ls schedule/GRT_GTFS_${mode}_*.zip | sort | tail -1)
+            old_hash=$(sha256sum "$latest" | cut -d' ' -f1)
+            if [ "$new_hash" != "$old_hash" ]; then
+              cp /tmp/${mode}.zip "schedule/GRT_GTFS_${mode}_${today}.zip"
+              changed=1
+              echo "NEW ${mode} schedule version archived (${new_hash})"
+            else
+              echo "${mode} schedule unchanged"
+            fi
+          done
+          if [ "$changed" -eq 1 ]; then
+            git config user.name "grt-logger-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add schedule/
+            git commit -m "schedule: new static GTFS version ${today}"
+            git pull --rebase -X theirs origin main
+            git push
+          fi
