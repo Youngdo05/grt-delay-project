@@ -8,9 +8,12 @@ on:
     # committing after each poll. Runner minutes are free on public repos.
     # GRT service hours are roughly 5am to 1am America/Toronto
     # (EDT = UTC-4 all collection window), i.e. 09:00-05:59 UTC.
-    # Minute 5 avoids the congested top of the hour.
-    - cron: "5 9-23 * * *"
-    - cron: "5 0-5 * * *"
+    # Minute 23: an uncommon minute far from :00/:05/:15/:30 load
+    # spikes (no cron fired at :05 on Jul 15 despite valid
+    # registration; changed 03:45Z, which also forces GitHub to
+    # re-register the schedule).
+    - cron: "23 9-23 * * *"
+    - cron: "23 0-5 * * *"
   workflow_dispatch: {}       # manual "Run workflow" button for testing
 
 permissions:
