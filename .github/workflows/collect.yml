@@ -50,15 +50,23 @@ jobs:
       - name: Install deps
         run: pip install -r requirements.txt
 
-      - name: Poll six times at 10 minute intervals
+      - name: Poll for ~47 min, every 2 min in rush hours, else every 10
         env:
           GRT_WRITE_CSV: "0"   # raw only; CSVs are rebuilt locally
         run: |
+          # Adaptive cadence (CS 486 instructor feedback, 2026-07-17):
+          # stop-to-stop propagation needs fine-grained trajectories, so
+          # poll every ~2 min during weekday rush (7-9am and 4-6pm
+          # Toronto = 11,12,20,21 UTC in July) and every 10 min
+          # otherwise. Volume cost is ~15-20 MB/day, well within limits.
           git config user.name "grt-logger-bot"
           git config user.email "actions@users.noreply.github.com"
+          start=$(date +%s)
           ok_polls=0
-          for i in 1 2 3 4 5 6; do
-            echo "=== poll $i of 6 at $(date -u +'%H:%M:%S') UTC ==="
+          i=0
+          while :; do
+            i=$((i+1))
+            echo "=== poll $i at $(date -u +'%H:%M:%S') UTC ==="
             rc=0
             python logger.py || rc=$?
             if [ "$rc" -eq 0 ]; then
@@ -89,12 +97,21 @@ jobs:
               done
               [ "$pushed" = yes ] || echo "push deferred to next poll"
             fi
-            if [ "$i" -lt 6 ]; then sleep 540; fi
+            hour=$(date -u +%H)
+            case "$hour" in
+              11|12|20|21) nap=120 ;;
+              *) nap=540 ;;
+            esac
+            elapsed=$(( $(date +%s) - start ))
+            if [ $(( elapsed + nap )) -ge 2820 ]; then
+              break
+            fi
+            sleep $nap
           done
-          echo "polls with all feeds ok: $ok_polls/6"
-          # Individual poll failures are tolerated, but an hour that
-          # never collected a complete bus+LRT pair must show RED.
+          echo "polls with all feeds ok: $ok_polls/$i"
+          # Individual poll failures are tolerated, but a run that never
+          # collected a complete bus+LRT pair must show RED.
           if [ "$ok_polls" -eq 0 ]; then
-            echo "::error::no poll collected a complete feed pair this hour"
+            echo "::error::no poll collected a complete feed pair this run"
             exit 1
           fi
