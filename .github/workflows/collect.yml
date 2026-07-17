@@ -12,8 +12,12 @@ on:
     # spikes (no cron fired at :05 on Jul 15 despite valid
     # registration; changed 03:45Z, which also forces GitHub to
     # re-register the schedule).
-    - cron: "23 9-23 * * *"
-    - cron: "23 0-5 * * *"
+    # Two slots per hour: GitHub honored only ~half the hourly slots over
+    # Jul 15-17 (21 inter-run gaps, morning rush missed twice). With 30-min
+    # slots and ~45-min jobs, the concurrency queue chains fired slots
+    # back-to-back into continuous coverage; dropped slots trim overlap.
+    - cron: "23,53 9-23 * * *"
+    - cron: "23,53 0-5 * * *"
   workflow_dispatch: {}       # manual "Run workflow" button for testing
 
 permissions:
