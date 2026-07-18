@@ -1,8 +1,8 @@
-last_attempt_utc=2026-07-18T03:38:25Z
-last_success_utc=2026-07-18T03:38:25Z
-rows_this_poll=2628
-bus_rows=2561
+last_attempt_utc=2026-07-18T03:47:27Z
+last_success_utc=2026-07-18T03:47:27Z
+rows_this_poll=1965
+bus_rows=1907
 bus_success=true
-lrt_rows=67
+lrt_rows=58
 lrt_success=true
 failures=none
