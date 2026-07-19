@@ -189,9 +189,10 @@ def main() -> int:
         total_rows += len(rows)
         print(f"[ok] {feed_name}: {len(rows)} stop-time rows")
 
-    # heartbeat for the morning glance; last_success_utc only advances
-    # when EVERY feed was fetched and parsed, so a persistent one-feed
-    # outage is visible at a glance via the per-feed lines
+    # heartbeat for the morning glance. last_success_utc advances only when
+    # data was actually collected (total_rows > 0), so an outage that returns
+    # empty-but-valid feed bodies during service hours cannot masquerade as
+    # success. A single empty feed is still visible via its per-feed rows line.
     status_path = DATA_DIR / "status.txt"
     all_ok = len(feed_rows) == len(FEEDS)
     last_success = ""
@@ -200,7 +201,7 @@ def main() -> int:
             if line.startswith("last_success_utc="):
                 last_success = line.split("=", 1)[1]
                 break
-    if all_ok:
+    if total_rows > 0:
         last_success = poll_utc
     per_feed = ""
     for feed_name in FEEDS:
