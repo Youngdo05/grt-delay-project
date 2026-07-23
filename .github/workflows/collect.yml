@@ -56,8 +56,9 @@ jobs:
         run: |
           # Adaptive cadence (CS 486 instructor feedback, 2026-07-17):
           # stop-to-stop propagation needs fine-grained trajectories, so
-          # poll every ~2 min during weekday rush and every 10 min otherwise.
-          # Rush = 7,8,9am and 4,5,6pm America/Toronto, which in July (EDT,
+          # Poll every ~2 min during rush-clock windows every day and every
+          # 10 min otherwise. This behavior is kept stable through the freeze.
+          # Rush clocks = 7,8,9am and 4,5,6pm America/Toronto, which in July (EDT,
           # UTC-4) is UTC hours 11,12,13 and 20,21,22.
           # Volume cost is ~15-20 MB/day, well within limits.
           git config user.name "grt-logger-bot"

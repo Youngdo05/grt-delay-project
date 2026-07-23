@@ -53,6 +53,8 @@ DATA_DIR = Path(__file__).parent / "data"
 RAW_DIR = DATA_DIR / "raw"
 CSV_DIR = DATA_DIR / "csv"
 WRITE_CSV = os.environ.get("GRT_WRITE_CSV", "1") != "0"
+MAX_FEED_AGE_S = 600
+MAX_FUTURE_FEED_S = 120
 
 CSV_FIELDS = [
     "poll_utc",          # when we fetched the feed
@@ -63,6 +65,7 @@ CSV_FIELDS = [
     "start_date",
     "start_time",
     "schedule_relationship",
+    "stop_schedule_relationship",
     "vehicle_id",
     "stop_sequence",
     "stop_id",
@@ -112,7 +115,25 @@ def parse_tripupdates(blob: bytes, feed_name: str, poll_utc: str) -> list[dict]:
     if not msg.IsInitialized():
         missing = ", ".join(msg.FindInitializationErrors()) or "required fields"
         raise ValueError(f"uninitialized GTFS-Realtime message (missing {missing})")
-    feed_ts = msg.header.timestamp or ""
+    if not msg.header.HasField("timestamp") or msg.header.timestamp <= 0:
+        raise ValueError("GTFS-Realtime feed is missing a valid header timestamp")
+    poll_epoch = int(
+        datetime.strptime(poll_utc, "%Y-%m-%dT%H:%M:%SZ")
+        .replace(tzinfo=timezone.utc)
+        .timestamp()
+    )
+    feed_ts = int(msg.header.timestamp)
+    feed_age = poll_epoch - feed_ts
+    if feed_age > MAX_FEED_AGE_S:
+        raise ValueError(
+            f"stale GTFS-Realtime feed: header is {feed_age}s old "
+            f"(maximum {MAX_FEED_AGE_S}s)"
+        )
+    if feed_age < -MAX_FUTURE_FEED_S:
+        raise ValueError(
+            f"future GTFS-Realtime timestamp: header is {-feed_age}s ahead "
+            f"(maximum {MAX_FUTURE_FEED_S}s)"
+        )
     rows = []
     for ent in msg.entity:
         if not ent.HasField("trip_update"):
@@ -134,6 +155,7 @@ def parse_tripupdates(blob: bytes, feed_name: str, poll_utc: str) -> list[dict]:
             row = dict(base)
             row["stop_sequence"] = stu.stop_sequence
             row["stop_id"] = stu.stop_id
+            row["stop_schedule_relationship"] = stu.schedule_relationship
             row["arrival_delay_s"] = (
                 stu.arrival.delay if stu.HasField("arrival") and stu.arrival.HasField("delay") else ""
             )
@@ -165,6 +187,15 @@ def validate_static_gtfs(blob: bytes) -> None:
         raise ValueError("static GTFS response is not a valid ZIP archive") from exc
 
 
+def is_usable_scheduled_arrival(row: dict) -> bool:
+    """Whether one parsed row can contribute to downstream arrival analysis."""
+    return (
+        row["schedule_relationship"] == 0
+        and row["stop_schedule_relationship"] == 0
+        and row["arrival_time_utc"] != ""
+    )
+
+
 def main() -> int:
     now_utc = datetime.now(timezone.utc)
     poll_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -178,6 +209,7 @@ def main() -> int:
     total_rows = 0
     failures = []
     feed_rows = {}
+    feed_usable_rows = {}
     for feed_name, url in FEEDS.items():
         try:
             blob = fetch(url)
@@ -193,7 +225,8 @@ def main() -> int:
         with gzip.open(raw_path, "wb") as f:
             f.write(blob)
 
-        # 2) parse, guarded per feed so one bad feed can't stop the other
+        # 2) parse and verify feed freshness, guarded per feed so one bad feed
+        #    cannot stop the other. Raw bytes remain archived for auditability.
         try:
             rows = parse_tripupdates(blob, feed_name, poll_utc)
         except Exception as e:
@@ -209,13 +242,24 @@ def main() -> int:
                     w.writeheader()
                 w.writerows(rows)
         feed_rows[feed_name] = len(rows)
+        feed_usable_rows[feed_name] = sum(
+            is_usable_scheduled_arrival(row) for row in rows)
         total_rows += len(rows)
-        print(f"[ok] {feed_name}: {len(rows)} stop-time rows")
+        if feed_usable_rows[feed_name] == 0:
+            print(
+                f"[warn] {feed_name}: parsed successfully but has no "
+                "scheduled arrival rows; archived but unusable for analysis"
+            )
+        else:
+            print(
+                f"[ok] {feed_name}: {len(rows)} stop-time rows, "
+                f"{feed_usable_rows[feed_name]} scheduled arrivals"
+            )
 
-    # heartbeat for the morning glance. last_success_utc advances only when
-    # data was actually collected (total_rows > 0), so an outage that returns
-    # empty-but-valid feed bodies during service hours cannot masquerade as
-    # success. A single empty feed is still visible via its per-feed rows line.
+    # Heartbeat for the morning glance. last_success_utc advances only when at
+    # least one feed contains a usable scheduled arrival, so an empty or
+    # status-only response cannot masquerade as usable collection. Per-feed
+    # success and usability remain separate below.
     status_path = DATA_DIR / "status.txt"
     all_ok = len(feed_rows) == len(FEEDS)
     last_success = ""
@@ -224,7 +268,7 @@ def main() -> int:
             if line.startswith("last_success_utc="):
                 last_success = line.split("=", 1)[1]
                 break
-    if total_rows > 0:
+    if sum(feed_usable_rows.values()) > 0:
         last_success = poll_utc
     per_feed = ""
     for feed_name in FEEDS:
@@ -232,6 +276,10 @@ def main() -> int:
         got = feed_name in feed_rows
         per_feed += f"{short}_rows={feed_rows.get(feed_name, '')}\n"
         per_feed += f"{short}_success={'true' if got else 'false'}\n"
+        per_feed += (
+            f"{short}_usable="
+            f"{'true' if feed_usable_rows.get(feed_name, 0) > 0 else 'false'}\n"
+        )
     with open(status_path, "w") as f:
         f.write(
             f"last_attempt_utc={poll_utc}\n"

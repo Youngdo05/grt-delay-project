@@ -8,3 +8,7 @@ __pycache__/
 prepare.py
 fetch_weather.py
 data/weather/
+
+# Local audit evidence must never be added to the public collection repo.
+audit_collection/
+audit_prepare/

@@ -2,8 +2,8 @@
 
 Archive of Grand River Transit (GRT) GTFS Realtime snapshots. A
 scheduled GitHub Actions workflow polls the public bus and ION light
-rail TripUpdates feeds about every 2 minutes during weekday rush
-windows and about every 10 minutes otherwise during service hours. It
+rail TripUpdates feeds about every 2 minutes during rush-clock windows
+every day and about every 10 minutes otherwise during service hours. It
 commits the raw protobuf snapshots to this repository.
 
 Collected for University of Waterloo coursework (Spring 2026). This
@@ -24,6 +24,11 @@ schedule/                     dated static GTFS zips, bus and LRT separately
 GitHub scheduled workflows can start late or omit a scheduled event.
 The archive therefore records achieved coverage rather than assuming
 the target cadence was met.
+
+Raw responses are archived even when validation fails. A parsed realtime
+feed is usable only when its header timestamp is no more than ten minutes
+old and no more than two minutes in the future. The heartbeat separately
+records whether each mode contained scheduled arrival rows.
 
 ## Local use
 
