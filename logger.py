@@ -5,8 +5,8 @@ Fetches TripUpdates from GRT's public feeds, saves the raw protobuf
 rows to a daily CSV for local inspection.
 
 Designed to be run every ~10 minutes by GitHub Actions or cron.
-Missing a run is fine: predictions are re-reported on every poll, and
-the final observation per (trip, stop) is what matters for labels.
+A missed run does not corrupt saved snapshots, but it reduces temporal
+resolution and can change label freshness or hide short-lived dynamics.
 
 Note: this feed publishes predicted arrival/departure times but NOT
 delay fields (verified 2026-07-07: 0 of 10,219 bus stop updates had
@@ -22,10 +22,12 @@ Env vars:
 
 import csv
 import gzip
+import io
 import os
 import ssl
 import sys
 import time
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -104,6 +106,12 @@ def fetch(url: str, retries: int = 3) -> bytes:
 def parse_tripupdates(blob: bytes, feed_name: str, poll_utc: str) -> list[dict]:
     msg = gtfs_realtime_pb2.FeedMessage()
     msg.ParseFromString(blob)
+    # protobuf accepts b"" without raising and returns an uninitialized proto2
+    # message. Treat that as a parse failure: otherwise an empty HTTP-200 body
+    # is reported as a successful zero-row feed and can mask a source outage.
+    if not msg.IsInitialized():
+        missing = ", ".join(msg.FindInitializationErrors()) or "required fields"
+        raise ValueError(f"uninitialized GTFS-Realtime message (missing {missing})")
     feed_ts = msg.header.timestamp or ""
     rows = []
     for ent in msg.entity:
@@ -140,6 +148,21 @@ def parse_tripupdates(blob: bytes, feed_name: str, poll_utc: str) -> list[dict]:
             )
             rows.append(row)
     return rows
+
+
+def validate_static_gtfs(blob: bytes) -> None:
+    """Reject error pages and incomplete archives before schedule archival."""
+    required = {"stop_times.txt", "trips.txt", "calendar_dates.txt"}
+    try:
+        with zipfile.ZipFile(io.BytesIO(blob)) as archive:
+            bad_member = archive.testzip()
+            if bad_member is not None:
+                raise ValueError(f"CRC failure in {bad_member}")
+            missing = required - set(archive.namelist())
+            if missing:
+                raise ValueError(f"missing required files: {sorted(missing)}")
+    except zipfile.BadZipFile as exc:
+        raise ValueError("static GTFS response is not a valid ZIP archive") from exc
 
 
 def main() -> int:

@@ -44,7 +44,7 @@ jobs:
           for mode in bus lrt; do
             if [ "$mode" = bus ]; then id=1; else id=2; fi
             # reuse the logger's TLS adapter (server needs SECLEVEL=1)
-            python -c "from logger import fetch; open('/tmp/${mode}.zip','wb').write(fetch('https://webapps.regionofwaterloo.ca/api/grt-routes/api/staticfeeds/${id}'))"
+            python -c "from logger import fetch,validate_static_gtfs; p='/tmp/${mode}.zip'; b=fetch('https://webapps.regionofwaterloo.ca/api/grt-routes/api/staticfeeds/${id}'); validate_static_gtfs(b); open(p,'wb').write(b)"
             new_hash=$(sha256sum /tmp/${mode}.zip | cut -d' ' -f1)
             latest=$(ls schedule/GRT_GTFS_${mode}_*.zip | sort | tail -1)
             old_hash=$(sha256sum "$latest" | cut -d' ' -f1)
