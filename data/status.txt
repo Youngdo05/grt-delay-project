@@ -1,7 +1,7 @@
-last_attempt_utc=2026-07-24T13:06:44Z
-last_success_utc=2026-07-24T13:06:44Z
-rows_this_poll=9536
-bus_rows=9344
+last_attempt_utc=2026-07-24T13:08:46Z
+last_success_utc=2026-07-24T13:08:46Z
+rows_this_poll=9307
+bus_rows=9115
 bus_success=true
 bus_usable=true
 lrt_rows=192
