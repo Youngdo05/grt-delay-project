@@ -196,6 +196,17 @@ def is_usable_scheduled_arrival(row: dict) -> bool:
     )
 
 
+def collection_exit_code(feed_rows: dict, feed_usable_rows: dict) -> int:
+    """Return 0 only when every configured feed has usable arrival rows."""
+    all_usable = all(
+        feed_name in feed_rows and feed_usable_rows.get(feed_name, 0) > 0
+        for feed_name in FEEDS
+    )
+    if all_usable:
+        return 0
+    return 1 if any(feed_usable_rows.values()) else 2
+
+
 def main() -> int:
     now_utc = datetime.now(timezone.utc)
     poll_utc = now_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -261,7 +272,6 @@ def main() -> int:
     # status-only response cannot masquerade as usable collection. Per-feed
     # success and usability remain separate below.
     status_path = DATA_DIR / "status.txt"
-    all_ok = len(feed_rows) == len(FEEDS)
     last_success = ""
     if status_path.exists():
         for line in status_path.read_text().splitlines():
@@ -290,10 +300,10 @@ def main() -> int:
         )
 
     # Exit codes consumed by the workflow's failure accounting:
-    #   0 = all feeds collected, 1 = partial, 2 = nothing collected
-    if all_ok:
-        return 0
-    return 1 if feed_rows else 2
+    #   0 = every feed has usable scheduled arrivals
+    #   1 = at least one feed has usable scheduled arrivals
+    #   2 = no feed has usable scheduled arrivals
+    return collection_exit_code(feed_rows, feed_usable_rows)
 
 
 if __name__ == "__main__":

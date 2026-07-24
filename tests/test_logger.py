@@ -123,5 +123,32 @@ class UsableArrivalTests(unittest.TestCase):
             self.assertFalse(logger.is_usable_scheduled_arrival(changed))
 
 
+class CollectionExitCodeTests(unittest.TestCase):
+    def test_all_feeds_must_have_usable_arrivals_for_success(self):
+        rows = {"bus_tripupdates": 10, "lrt_tripupdates": 4}
+        self.assertEqual(
+            logger.collection_exit_code(
+                rows, {"bus_tripupdates": 8, "lrt_tripupdates": 3}
+            ),
+            0,
+        )
+        self.assertEqual(
+            logger.collection_exit_code(
+                rows, {"bus_tripupdates": 8, "lrt_tripupdates": 0}
+            ),
+            1,
+        )
+
+    def test_all_zero_or_missing_usable_feeds_is_failure(self):
+        rows = {"bus_tripupdates": 0, "lrt_tripupdates": 0}
+        self.assertEqual(
+            logger.collection_exit_code(
+                rows, {"bus_tripupdates": 0, "lrt_tripupdates": 0}
+            ),
+            2,
+        )
+        self.assertEqual(logger.collection_exit_code({}, {}), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

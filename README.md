@@ -28,7 +28,10 @@ the target cadence was met.
 Raw responses are archived even when validation fails. A parsed realtime
 feed is usable only when its header timestamp is no more than ten minutes
 old and no more than two minutes in the future. The heartbeat separately
-records whether each mode contained scheduled arrival rows.
+records whether each mode contained scheduled arrival rows. A poll is
+successful for workflow accounting only when both modes contain at least one
+usable scheduled arrival; a structurally valid zero-row response is archived
+but cannot make the run green.
 
 ## Local use
 
