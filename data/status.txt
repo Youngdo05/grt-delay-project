@@ -1,10 +1,10 @@
-last_attempt_utc=2026-08-05T13:49:42Z
-last_success_utc=2026-08-05T13:49:42Z
-rows_this_poll=9102
-bus_rows=8913
+last_attempt_utc=2026-08-05T13:51:44Z
+last_success_utc=2026-08-05T13:51:44Z
+rows_this_poll=9135
+bus_rows=8942
 bus_success=true
 bus_usable=true
-lrt_rows=189
+lrt_rows=193
 lrt_success=true
 lrt_usable=true
 failures=none
