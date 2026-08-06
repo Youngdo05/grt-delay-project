@@ -1,4 +1,4 @@
-last_attempt_utc=2026-08-06T23:12:04Z
+last_attempt_utc=2026-08-06T23:23:36Z
 last_success_utc=2026-08-06T14:01:29Z
 rows_this_poll=0
 bus_rows=
